@@ -52,256 +52,225 @@
     }
     #settings {
       display: none; background: #1a1a1a; padding: 16px; border-bottom: 1px solid #333;
+      max-height: 70vh; overflow-y: auto;
     }
     #settings.show { display: block; }
-    #settings label { display: block; font-size: 12px; color: #aaa; margin: 8px 0 4px; }
+    #settings label { display: block; font-size: 12px; color: #aaa; margin: 10px 0 4px; }
     #settings input {
       width: 100%; background: #252525; border: 1px solid #333; border-radius: 6px;
       padding: 8px 10px; color: #eee; font-size: 13px;
     }
-    #settings .row { display: flex; gap: 8px; margin-top: 12px; }
+    #settings .row { display: flex; gap: 8px; margin-top: 14px; }
     #settings button { flex: 1; padding: 8px; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; }
     .btn-save { background: #4fc3f7; color: #000; }
     .btn-clear { background: #444; color: #ccc; }
-    .hint { font-size: 11px; color: #666; margin-top: 8px; line-height: 1.4; }
+    .hint { font-size: 11px; color: #666; margin-top: 10px; line-height: 1.5; }
   </style>
 </head>
 <body>
   <header>
     <div class="logo">ibot</div>
-    <div class="status" id="statusText">未连接</div>
+    <div class="status" id="statusText">未配置</div>
     <button id="btnSettings">设置</button>
   </header>
 
   <div id="settings">
-    <label>GitHub Token（仅保存在本机）</label>
-    <input type="password" id="tokenInput" placeholder="github_pat_...">
-    <label>默认仓库</label>
-    <input type="text" id="repoInput" value="xuy132/ibot">
+    <label>GitHub Token（写入知识库用）</label>
+    <input type="password" id="githubToken" placeholder="github_pat_...">
+    <label>GitHub 仓库</label>
+    <input type="text" id="githubRepo" value="xuy132/ibot">
+    <label>Groq API Key（对话大脑）</label>
+    <input type="password" id="groqKey" placeholder="gsk_...">
     <div class="row">
-      <button class="btn-save" id="btnSave">保存</button>
-      <button class="btn-clear" id="btnClear">清除 Token</button>
+      <button class="btn-save" id="btnSave">保存到本机</button>
+      <button class="btn-clear" id="btnClear">清除所有 Key</button>
     </div>
-    <div class="hint">Fine-grained Token 需要 Contents: Read and write + Metadata: Read-only<br>永远不要把 Token 发到聊天里</div>
+    <div class="hint">
+      所有 Key 只保存在你浏览器本地，不会上传。<br>
+      Groq 免费额度用完后，需要你自己去官网更新 Key。<br>
+      永远不要把任何 Key 发到聊天窗口。
+    </div>
   </div>
 
   <div id="chat"></div>
 
   <footer>
-    <input id="input" type="text" placeholder="直接提问，或：学习 主题 / 天气 地点" autocomplete="off">
+    <input id="input" type="text" placeholder="直接对话，或输入：天气 上饶 / 学习 主题" autocomplete="off">
     <button id="send">发送</button>
   </footer>
 
   <script>
-    // ===================== GitHub =====================
-    const GitHub = {
-      loadConfig() {
+    // ==================== 配置 ====================
+    const Config = {
+      load() {
         return {
-          token: localStorage.getItem('ibot_token') || '',
-          repo: localStorage.getItem('ibot_repo') || 'xuy132/ibot'
+          githubToken: localStorage.getItem('ibot_github_token') || '',
+          githubRepo: localStorage.getItem('ibot_github_repo') || 'xuy132/ibot',
+          groqKey: localStorage.getItem('ibot_groq_key') || ''
         };
       },
-      saveConfig(token, repo) {
-        if (token !== undefined) localStorage.setItem('ibot_token', token);
-        if (repo !== undefined) localStorage.setItem('ibot_repo', repo);
+      save(data) {
+        if (data.githubToken !== undefined) localStorage.setItem('ibot_github_token', data.githubToken);
+        if (data.githubRepo !== undefined) localStorage.setItem('ibot_github_repo', data.githubRepo);
+        if (data.groqKey !== undefined) localStorage.setItem('ibot_groq_key', data.groqKey);
       },
-      clearToken() {
-        localStorage.removeItem('ibot_token');
-      },
-      async putFile(path, content, message) {
-        const cfg = this.loadConfig();
-        if (!cfg.token) throw new Error('未设置 Token');
-        const [owner, repoName] = cfg.repo.split('/');
-        if (!owner || !repoName) throw new Error('仓库格式错误');
+      clear() {
+        localStorage.removeItem('ibot_github_token');
+        localStorage.removeItem('ibot_groq_key');
+      }
+    };
 
-        let sha = null;
-        try {
-          const getRes = await fetch(`https://api.github.com/repos/${owner}/${repoName}/contents/${path}`, {
-            headers: { 'Authorization': `Bearer ${cfg.token}`, 'Accept': 'application/vnd.github+json' }
-          });
-          if (getRes.ok) {
-            const data = await getRes.json();
-            sha = data.sha;
-          }
-        } catch (e) {}
+    // ==================== GitHub 写入 ====================
+    async function githubPut(path, content, message) {
+      const cfg = Config.load();
+      if (!cfg.githubToken) throw new Error('未设置 GitHub Token');
+      const [owner, repo] = cfg.githubRepo.split('/');
+      if (!owner || !repo) throw new Error('仓库格式错误');
 
-        const body = {
-          message: message || `ibot: ${path}`,
-          content: btoa(unescape(encodeURIComponent(content))),
-          branch: 'main'
-        };
-        if (sha) body.sha = sha;
-
-        const res = await fetch(`https://api.github.com/repos/${owner}/${repoName}/contents/${path}`, {
-          method: 'PUT',
-          headers: {
-            'Authorization': `Bearer ${cfg.token}`,
-            'Accept': 'application/vnd.github+json',
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(body)
+      let sha = null;
+      try {
+        const r = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/${path}`, {
+          headers: { 'Authorization': `Bearer ${cfg.githubToken}`, 'Accept': 'application/vnd.github+json' }
         });
+        if (r.ok) sha = (await r.json()).sha;
+      } catch(e) {}
 
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({}));
-          throw new Error(err.message || `GitHub ${res.status}`);
-        }
-        const result = await res.json();
-        return result.content?.html_url || `https://github.com/${owner}/${repoName}/blob/main/${path}`;
+      const body = {
+        message: message || `ibot: ${path}`,
+        content: btoa(unescape(encodeURIComponent(content))),
+        branch: 'main'
+      };
+      if (sha) body.sha = sha;
+
+      const res = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/${path}`, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${cfg.githubToken}`,
+          'Accept': 'application/vnd.github+json',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(body)
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || `GitHub ${res.status}`);
       }
-    };
+      const data = await res.json();
+      return data.content?.html_url || '';
+    }
 
-    // ===================== Sensors =====================
-    const Sensors = {
-      async getWeather(place) {
-        try {
-          const geoUrl = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(place)}&count=1&language=zh&format=json`;
-          const geoRes = await fetch(geoUrl);
-          const geoData = await geoRes.json();
-          if (!geoData.results?.length) return `找不到地点「${place}」`;
-          const loc = geoData.results[0];
-          const name = loc.name + (loc.admin1 ? ' · ' + loc.admin1 : '');
-
-          const weatherUrl = `https://api.open-meteo.com/v1/forecast?latitude=${loc.latitude}&longitude=${loc.longitude}&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m&timezone=Asia/Shanghai`;
-          const wRes = await fetch(weatherUrl);
-          const wData = await wRes.json();
-          const cur = wData.current;
-
-          const map = {0:'晴朗',1:'主要晴朗',2:'局部多云',3:'阴天',45:'有雾',61:'小雨',63:'中雨',65:'大雨',71:'小雪',80:'小阵雨',95:'雷暴'};
-          const desc = map[cur.weather_code] || '未知';
-
-          return `${name}\n气温 ${cur.temperature_2m}°C\n湿度 ${cur.relative_humidity_2m}%\n风速 ${cur.wind_speed_10m} km/h\n状况：${desc}`;
-        } catch (e) {
-          return '天气查询失败：' + e.message;
-        }
-      },
-
-      async getWikipedia(topic) {
-        try {
-          let url = `https://zh.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(topic)}`;
-          let res = await fetch(url);
-          let data = await res.json();
-
-          if (!data.extract) {
-            url = `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(topic)}`;
-            res = await fetch(url);
-            data = await res.json();
-          }
-
-          if (data.extract) {
-            return {
-              title: data.title || topic,
-              extract: data.extract,
-              description: data.description || '',
-              url: data.content_urls?.desktop?.page || ''
-            };
-          }
-          return null;
-        } catch (e) {
-          return null;
-        }
+    // ==================== 天气 ====================
+    async function getWeather(place) {
+      try {
+        const geo = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(place)}&count=1&language=zh&format=json`).then(r => r.json());
+        if (!geo.results?.length) return `找不到地点「${place}」`;
+        const loc = geo.results[0];
+        const name = loc.name + (loc.admin1 ? ' · ' + loc.admin1 : '');
+        const w = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${loc.latitude}&longitude=${loc.longitude}&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m&timezone=Asia/Shanghai`).then(r => r.json());
+        const c = w.current;
+        const map = {0:'晴朗',1:'主要晴朗',2:'局部多云',3:'阴天',45:'有雾',61:'小雨',63:'中雨',65:'大雨',71:'小雪',80:'小阵雨',95:'雷暴'};
+        return `${name}\n气温 ${c.temperature_2m}°C\n湿度 ${c.relative_humidity_2m}%\n风速 ${c.wind_speed_10m} km/h\n状况：${map[c.weather_code] || '未知'}`;
+      } catch(e) {
+        return '天气查询失败：' + e.message;
       }
-    };
+    }
 
-    // ===================== Brain =====================
-    const Brain = {
-      async process(text) {
-        const original = text.trim();
-        const lower = original.toLowerCase();
+    // ==================== Groq 对话 ====================
+    const history = [];  // 简单多轮记忆
 
-        if (lower.includes('清除token') || lower.includes('清除 token')) {
-          GitHub.clearToken();
-          updateStatus();
-          return { type: 'text', content: 'Token 已清除。' };
-        }
+    async function chatWithGroq(userText) {
+      const cfg = Config.load();
+      if (!cfg.groqKey) throw new Error('未设置 Groq API Key，请先点右上角「设置」');
 
-        // 学习指令
-        let topic = null;
-        const patterns = [
-          /^(学习|学|研究|阅读|了解|爬取|抓取)[：:\s]*(.+)$/i,
-          /^(.+?)\s*(学习|研究)$/i
-        ];
-        for (const p of patterns) {
-          const m = original.match(p);
-          if (m) {
-            topic = (m[2] || m[1]).trim().replace(/^[：:]\s*/, '');
-            break;
-          }
-        }
-        if (topic && topic.length > 1) {
-          return await this.learnAndAnswer(topic, true);
-        }
+      // 系统提示
+      const systemPrompt = `你是 ibot，一个运行在纯网页上的个人智能体。
+你的目标是不断学习、记住知识，并尽量给出有用、诚实的回答。
+你可以：
+- 正常对话和推理
+- 回答用户关于天气的问题时，可以说「请让我查一下天气」
+- 当用户说「学习 XXX」时，帮助整理知识
 
-        // 天气
-        const weatherKeys = ['天气', '气温', '温度', '下雨', '雨', '冷不冷', '热不热', '多少度'];
-        if (weatherKeys.some(k => original.includes(k))) {
-          let place = original.replace(/今天|今日|明天|现在|的|天气|气温|温度|怎么样|如何|多少度|冷不冷|热不热|[？?。]/g, '').trim();
-          if (!place || place.length < 2) place = '上饶';
-          const result = await Sensors.getWeather(place);
-          return { type: 'text', content: result };
-        }
+回答请简洁有条理，使用中文。`;
 
-        // 状态 / 介绍
-        if (['状态', '进度', '进化', '你怎么进化', '你是谁', '介绍'].some(k => lower.includes(k))) {
-          const cfg = GitHub.loadConfig();
-          return {
-            type: 'text',
-            content: `我是 ibot。\n当前能力：\n• 直接提问 → 自动从维基百科学习并回答，同时写入仓库\n• 学习 主题 → 强制学习\n• 查天气\n• GitHub：${cfg.token ? '已连接 ' + cfg.repo : '未设置 Token'}`
-          };
-        }
+      history.push({ role: 'user', content: userText });
 
-        if (['你好', '您好', 'hello', 'hi', '嗨'].some(g => lower.includes(g))) {
-          return { type: 'text', content: '你好。直接问我任何问题，我会尝试学习并回答。也可以说「学习 主题」或「天气 地点」。' };
-        }
+      // 只保留最近几轮，防止太长
+      const messages = [
+        { role: 'system', content: systemPrompt },
+        ...history.slice(-8)
+      ];
 
-        // 默认：把任何输入当问题，学习并回答
-        return await this.learnAndAnswer(original, false);
-      },
+      const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${cfg.groqKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          model: 'llama-3.3-70b-versatile',
+          messages: messages,
+          temperature: 0.7,
+          max_tokens: 1024
+        })
+      });
 
-      async learnAndAnswer(topic, forceSave) {
-        const wiki = await Sensors.getWikipedia(topic);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        if (res.status === 401) throw new Error('Groq Key 无效，请检查设置');
+        if (res.status === 429) throw new Error('Groq 额度已用完或请求过快，请稍后再试或更新 Key');
+        throw new Error(err.error?.message || `Groq 错误 ${res.status}`);
+      }
 
-        if (!wiki || !wiki.extract) {
-          return {
-            type: 'text',
-            content: `关于「${topic}」，暂时没有找到可靠信息。\n可以换更具体的关键词，或用「学习 主题」强制记录。`
-          };
-        }
+      const data = await res.json();
+      const reply = data.choices?.[0]?.message?.content || '没有收到有效回复';
+      history.push({ role: 'assistant', content: reply });
+      return reply;
+    }
 
-        let answer = `**${wiki.title}**`;
-        if (wiki.description) answer += `（${wiki.description}）`;
-        answer += `\n\n${wiki.extract}`;
-        if (wiki.url) answer += `\n\n来源：${wiki.url}`;
+    // ==================== 主处理逻辑 ====================
+    async function process(text) {
+      const original = text.trim();
+      const lower = original.toLowerCase();
 
-        // 自动写入知识库
+      // 天气专用
+      if (['天气', '气温', '温度', '下雨'].some(k => original.includes(k))) {
+        let place = original
+          .replace(/今天|今日|明天|现在|的|天气|气温|温度|怎么样|如何|多少度|冷不冷|热不热|穿衣注意|穿衣|[？?。,，、]/g, ' ')
+          .trim()
+          .split(/\s+/)[0];
+        if (!place || place.length < 2) place = '上饶';
+        return await getWeather(place);
+      }
+
+      // 学习指令 → 用 Groq 生成内容再写入 GitHub
+      const learnMatch = original.match(/^(学习|学|研究|阅读)[：:\s]*(.+)$/i);
+      if (learnMatch) {
+        const topic = learnMatch[2].trim();
+        const content = await chatWithGroq(`请为「${topic}」写一份简洁有用的学习笔记，包含核心要点、重要人物或概念、以及建议的下一步。用 Markdown 格式。`);
         const date = new Date().toISOString().slice(0, 10);
         const safeName = topic.replace(/[\/\\?%*:|"<>：]/g, '_').replace(/\s+/g, '_').slice(0, 40);
         const path = `knowledge/${safeName}.md`;
-        const content = `# ${wiki.title}\n\n> ibot 于 ${date} 自动学习\n\n${wiki.extract}\n\n${wiki.url ? '[完整条目](' + wiki.url + ')' : ''}\n\n---\n*自动记录*`;
-
         try {
-          await GitHub.putFile(path, content, `ibot 自动学习：${topic}`);
-          answer += `\n\n（已自动写入知识库：${path}）`;
-        } catch (err) {
-          if (forceSave) answer += `\n\n写入知识库失败：${err.message}`;
+          const url = await githubPut(path, `# ${topic}\n\n> ibot 于 ${date} 学习\n\n${content}\n\n---\n*ibot*`, `ibot 学习：${topic}`);
+          return `已学习并写入知识库。\n文件：${path}\n\n${content}`;
+        } catch (e) {
+          return `学习内容已生成，但写入 GitHub 失败：${e.message}\n\n${content}`;
         }
-
-        return { type: 'text', content: answer };
       }
-    };
 
-    // ===================== UI =====================
-    const chat = document.getElementById('chat');
+      // 默认：走 Groq 对话
+      return await chatWithGroq(original);
+    }
+
+    // ==================== UI ====================
+    const chatEl = document.getElementById('chat');
     const input = document.getElementById('input');
-    const sendBtn = document.getElementById('send');
     const statusText = document.getElementById('statusText');
     const settingsPanel = document.getElementById('settings');
-    const tokenInput = document.getElementById('tokenInput');
-    const repoInput = document.getElementById('repoInput');
 
     function now() {
       const d = new Date();
-      return d.getHours().toString().padStart(2, '0') + ':' + d.getMinutes().toString().padStart(2, '0');
+      return d.getHours().toString().padStart(2,'0') + ':' + d.getMinutes().toString().padStart(2,'0');
     }
 
     function addMsg(text, type) {
@@ -313,21 +282,24 @@
         t.textContent = (type === 'user' ? '你' : 'ibot') + '  ' + now();
         div.appendChild(t);
       }
-      const content = document.createElement('div');
-      content.textContent = text;
-      div.appendChild(content);
-      chat.appendChild(div);
-      chat.scrollTop = chat.scrollHeight;
+      const c = document.createElement('div');
+      c.textContent = text;
+      div.appendChild(c);
+      chatEl.appendChild(div);
+      chatEl.scrollTop = chatEl.scrollHeight;
       return div;
     }
 
     function updateStatus() {
-      const cfg = GitHub.loadConfig();
-      if (cfg.token) {
-        statusText.textContent = '· 已连接 · ' + cfg.repo;
+      const cfg = Config.load();
+      const parts = [];
+      if (cfg.groqKey) parts.push('Groq');
+      if (cfg.githubToken) parts.push('GitHub');
+      if (parts.length) {
+        statusText.textContent = '· 已连接 · ' + parts.join(' + ');
         statusText.style.color = '#81c784';
       } else {
-        statusText.textContent = '· 未连接 GitHub';
+        statusText.textContent = '· 未配置 Key';
         statusText.style.color = '#888';
       }
     }
@@ -337,45 +309,51 @@
       if (!text) return;
       input.value = '';
       addMsg(text, 'user');
-      const thinking = addMsg('思考并学习中…', 'thinking');
+      const thinking = addMsg('思考中…', 'thinking');
       try {
-        const result = await Brain.process(text);
+        const reply = await process(text);
         thinking.remove();
-        addMsg(result.content, 'bot');
+        addMsg(reply, 'bot');
       } catch (e) {
         thinking.remove();
-        addMsg('出错：' + e.message, 'error');
+        addMsg('错误：' + e.message, 'error');
       }
     }
 
-    sendBtn.onclick = send;
+    document.getElementById('send').onclick = send;
     input.onkeydown = e => { if (e.key === 'Enter') send(); };
 
     document.getElementById('btnSettings').onclick = () => {
       settingsPanel.classList.toggle('show');
-      const cfg = GitHub.loadConfig();
-      tokenInput.value = cfg.token;
-      repoInput.value = cfg.repo;
+      const cfg = Config.load();
+      document.getElementById('githubToken').value = cfg.githubToken;
+      document.getElementById('githubRepo').value = cfg.githubRepo;
+      document.getElementById('groqKey').value = cfg.groqKey;
     };
 
     document.getElementById('btnSave').onclick = () => {
-      GitHub.saveConfig(tokenInput.value.trim(), repoInput.value.trim());
+      Config.save({
+        githubToken: document.getElementById('githubToken').value.trim(),
+        githubRepo: document.getElementById('githubRepo').value.trim(),
+        groqKey: document.getElementById('groqKey').value.trim()
+      });
       settingsPanel.classList.remove('show');
       updateStatus();
       addMsg('配置已保存到本机。', 'system');
     };
 
     document.getElementById('btnClear').onclick = () => {
-      GitHub.clearToken();
-      tokenInput.value = '';
+      Config.clear();
+      document.getElementById('githubToken').value = '';
+      document.getElementById('groqKey').value = '';
       settingsPanel.classList.remove('show');
       updateStatus();
-      addMsg('Token 已清除。', 'system');
+      addMsg('所有 Key 已清除。', 'system');
     };
 
     // 启动
     updateStatus();
-    addMsg('ibot 已启动（单文件完整版）。\n\n直接提问任何问题，我会尝试从维基百科学习并回答，同时写入仓库。\n也可以用「学习 主题」或「天气 地点」。', 'system');
+    addMsg('ibot 已启动（Groq 对话版）。\n\n1. 点右上角「设置」\n2. 填入 GitHub Token 和 Groq API Key\n3. 保存后即可对话\n\n支持：\n• 直接聊天（使用 Groq）\n• 天气 地点\n• 学习 主题（生成笔记并写入 GitHub）', 'system');
     input.focus();
   </script>
 </body>
