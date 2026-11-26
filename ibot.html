@@ -3,25 +3,18 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ibot · 进化引擎</title>
+  <title>ibot</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
       font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
-      background: #0f0f0f;
-      color: #e8e8e8;
-      height: 100vh;
-      display: flex;
-      flex-direction: column;
+      background: #0f0f0f; color: #e8e8e8; height: 100vh;
+      display: flex; flex-direction: column;
     }
     header {
-      background: #151515;
-      padding: 12px 16px;
-      display: flex;
-      align-items: center;
-      gap: 10px;
+      background: #151515; padding: 12px 16px;
+      display: flex; align-items: center; gap: 10px;
       border-bottom: 1px solid #222;
-      flex-wrap: wrap;
     }
     header .logo { font-size: 18px; font-weight: 700; color: #4fc3f7; }
     header .status { font-size: 12px; color: #888; flex: 1; }
@@ -29,7 +22,6 @@
       background: #333; color: #ccc; border: none; border-radius: 6px;
       padding: 6px 12px; font-size: 12px; cursor: pointer;
     }
-    header button:hover { background: #444; }
     #chat {
       flex: 1; overflow-y: auto; padding: 14px;
       display: flex; flex-direction: column; gap: 12px;
@@ -38,7 +30,7 @@
       max-width: 88%; padding: 10px 14px; border-radius: 12px;
       line-height: 1.5; font-size: 14px; white-space: pre-wrap; word-break: break-word;
     }
-    .msg.system { align-self: center; background: #1e1e1e; color: #999; font-size: 13px; text-align: center; max-width: 95%; }
+    .msg.system { align-self: center; background: #1e1e1e; color: #999; font-size: 13px; text-align: center; }
     .msg.user { align-self: flex-end; background: #1e3a5f; color: #e3f2fd; }
     .msg.bot { align-self: flex-start; background: #1f2a1f; color: #c8e6c9; }
     .msg.thinking { align-self: flex-start; background: #2a2a1a; color: #ffecb3; font-size: 13px; }
@@ -57,7 +49,6 @@
       background: #4fc3f7; color: #000; border: none; border-radius: 8px;
       padding: 0 18px; font-size: 14px; font-weight: 600; cursor: pointer;
     }
-    #send:hover { background: #81d4fa; }
     #settings {
       display: none; background: #1a1a1a; padding: 16px; border-bottom: 1px solid #333;
     }
@@ -68,9 +59,7 @@
       padding: 8px 10px; color: #eee; font-size: 13px;
     }
     #settings .row { display: flex; gap: 8px; margin-top: 12px; }
-    #settings button {
-      flex: 1; padding: 8px; border: none; border-radius: 6px; cursor: pointer; font-size: 13px;
-    }
+    #settings button { flex: 1; padding: 8px; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; }
     .btn-save { background: #4fc3f7; color: #000; }
     .btn-clear { background: #444; color: #ccc; }
     .hint { font-size: 11px; color: #666; margin-top: 8px; line-height: 1.4; }
@@ -79,282 +68,32 @@
 <body>
   <header>
     <div class="logo">ibot</div>
-    <div class="status" id="statusText">· 未连接 GitHub · 仅本地</div>
-    <button id="btnSettings">设置 Token</button>
+    <div class="status" id="statusText">加载中…</div>
+    <button id="btnSettings">设置</button>
   </header>
 
   <div id="settings">
-    <label>GitHub Personal Access Token（只存在你电脑，不会上传）</label>
-    <input type="password" id="tokenInput" placeholder="github_pat_... 或 ghp_...">
-    <label>默认仓库（owner/repo）</label>
-    <input type="text" id="repoInput" placeholder="xuy132/ibot" value="xuy132/ibot">
+    <label>GitHub Token（仅保存在本机）</label>
+    <input type="password" id="tokenInput" placeholder="github_pat_...">
+    <label>默认仓库</label>
+    <input type="text" id="repoInput" value="xuy132/ibot">
     <div class="row">
-      <button class="btn-save" id="btnSave">保存到本地</button>
+      <button class="btn-save" id="btnSave">保存</button>
       <button class="btn-clear" id="btnClear">清除 Token</button>
     </div>
-    <div class="hint">
-      推荐创建 Fine-grained Token：只勾选这一个仓库的 Contents: Read and write，有效期 7～30 天。<br>
-      创建地址：GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens<br>
-      <b style="color:#f88">永远不要把 Token 发到聊天里！</b>
-    </div>
+    <div class="hint">Fine-grained Token 需要 Contents: Read and write + Metadata: Read-only<br>永远不要把 Token 发到聊天里</div>
   </div>
 
   <div id="chat"></div>
 
   <footer>
-    <input id="input" type="text" placeholder="输入命令或聊天… 例：学习 经典文学" autocomplete="off">
+    <input id="input" type="text" placeholder="直接提问，或输入：学习 主题 / 天气 地点" autocomplete="off">
     <button id="send">发送</button>
   </footer>
 
-  <script>
-    const chat = document.getElementById('chat');
-    const input = document.getElementById('input');
-    const sendBtn = document.getElementById('send');
-    const statusText = document.getElementById('statusText');
-    const settingsPanel = document.getElementById('settings');
-    const tokenInput = document.getElementById('tokenInput');
-    const repoInput = document.getElementById('repoInput');
-
-    function loadConfig() {
-      return {
-        token: localStorage.getItem('ibot_token') || '',
-        repo: localStorage.getItem('ibot_repo') || 'xuy132/ibot'
-      };
-    }
-    function saveConfig(token, repo) {
-      if (token) localStorage.setItem('ibot_token', token);
-      if (repo) localStorage.setItem('ibot_repo', repo);
-      updateStatus();
-    }
-    function clearToken() {
-      localStorage.removeItem('ibot_token');
-      updateStatus();
-      addMsg('Token 已从本机清除。', 'system');
-    }
-    function updateStatus() {
-      const cfg = loadConfig();
-      if (cfg.token) {
-        statusText.textContent = '· 已连接 GitHub · ' + cfg.repo + ' · 可自动写入';
-        statusText.style.color = '#81c784';
-      } else {
-        statusText.textContent = '· 未连接 GitHub · 仅本地能力';
-        statusText.style.color = '#888';
-      }
-    }
-
-    function now() {
-      const d = new Date();
-      return d.getHours().toString().padStart(2,'0') + ':' + d.getMinutes().toString().padStart(2,'0');
-    }
-    function addMsg(text, type) {
-      const div = document.createElement('div');
-      div.className = 'msg ' + type;
-      if (type !== 'system' && type !== 'thinking') {
-        const t = document.createElement('div');
-        t.className = 'time';
-        t.textContent = (type === 'user' ? '你' : 'ibot') + '  ' + now();
-        div.appendChild(t);
-      }
-      const content = document.createElement('div');
-      content.textContent = text;
-      div.appendChild(content);
-      chat.appendChild(div);
-      chat.scrollTop = chat.scrollHeight;
-      return div;
-    }
-
-    async function githubPutFile(path, content, message, targetRepo) {
-      const cfg = loadConfig();
-      const token = cfg.token;
-      if (!token) throw new Error('还没有设置 Token，请先点右上角「设置 Token」');
-
-      const repo = targetRepo || cfg.repo;
-      const [owner, repoName] = repo.split('/');
-      if (!owner || !repoName) throw new Error('仓库格式错误，应为 owner/repo');
-
-      let sha = null;
-      try {
-        const getRes = await fetch(`https://api.github.com/repos/${owner}/${repoName}/contents/${path}`, {
-          headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/vnd.github+json' }
-        });
-        if (getRes.ok) {
-          const data = await getRes.json();
-          sha = data.sha;
-        }
-      } catch (e) {}
-
-      const body = {
-        message: message || `ibot 自动更新: ${path}`,
-        content: btoa(unescape(encodeURIComponent(content))),
-        branch: 'main'
-      };
-      if (sha) body.sha = sha;
-
-      const res = await fetch(`https://api.github.com/repos/${owner}/${repoName}/contents/${path}`, {
-        method: 'PUT',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Accept': 'application/vnd.github+json',
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(body)
-      });
-
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.message || `GitHub 返回 ${res.status}`);
-      }
-      const result = await res.json();
-      return result.content.html_url || `https://github.com/${owner}/${repoName}/blob/main/${path}`;
-    }
-
-    function generateKnowledge(topic) {
-      const t = topic.toLowerCase();
-      const date = new Date().toISOString().slice(0, 10);
-
-      if (t.includes('文学') || t.includes('经典') || t.includes('小说') || t.includes('读书')) {
-        return {
-          path: 'knowledge/文学.md',
-          content: `# 经典文学学习笔记\n\n> 由 ibot 于 ${date} 自动生成并写入仓库\n\n## 推荐入门方向\n- 中国古典：红楼梦、西游记、三国演义、水浒传、论语、道德经\n- 世界经典（公有领域为主）：简·爱、傲慢与偏见、老人与海、1984、动物庄园、小王子\n- 现当代可关注：余华、莫言、村上春树、卡夫卡\n\n## 学习方法建议\n1. 先读原著（或优质译本）\n2. 记录人物关系与主题\n3. 对比不同时代作品的共性\n4. 定期写短评，加深理解\n\n## 下一步可扩展\n- 按主题整理（爱情、权力、自由、成长）\n- 建立人物关系图谱\n- 收集优质书评与解读\n\n---\n*ibot 进化记录*`
-        };
-      }
-
-      if (t.includes('电影') || t.includes('影片') || t.includes('cinema')) {
-        return {
-          path: 'knowledge/电影.md',
-          content: `# 电影学习笔记\n\n> 由 ibot 于 ${date} 自动生成并写入仓库\n\n## 推荐类型与代表作\n- 剧情：肖申克的救赎、阿甘正传、盗梦空间、星际穿越\n- 科幻：2001太空漫游、银翼杀手、黑客帝国\n- 动画：千与千寻、飞屋环游记、心灵奇旅\n- 华语：霸王别姬、活着、哪吒之魔童降世\n\n## 学习维度\n- 叙事结构（三幕、非线性）\n- 视听语言（镜头、剪辑、配乐）\n- 主题与隐喻\n- 导演风格对比\n\n## 建议行动\n每周精看 1 部 + 写 300 字观后感，存入本仓库。\n\n---\n*ibot 进化记录*`
-        };
-      }
-
-      if (t.includes('歌') || t.includes('音乐') || t.includes('song') || t.includes('music')) {
-        return {
-          path: 'knowledge/音乐.md',
-          content: `# 音乐 / 歌曲学习笔记\n\n> 由 ibot 于 ${date} 自动生成并写入仓库\n\n## 推荐方向\n- 华语经典：李宗盛、罗大佑、崔健、周杰伦早期、陈奕迅\n- 西方经典：The Beatles、Queen、Pink Floyd、Bob Dylan\n- 独立 / 另类：请按个人口味扩展\n\n## 学习角度\n- 歌词主题与修辞\n- 编曲与和声\n- 时代背景与社会意义\n- 翻唱与原版对比\n\n## 注意\n现代受版权保护的歌词请勿完整复制，只记录分析与感悟。\n\n---\n*ibot 进化记录*`
-        };
-      }
-
-      const safeName = topic.replace(/[\/\\?%*:|"<>]/g, '_').slice(0, 30);
-      return {
-        path: `knowledge/${safeName}.md`,
-        content: `# ${topic} 学习笔记\n\n> 由 ibot 于 ${date} 自动生成并写入仓库\n\n## 为什么学这个\n（待补充）\n\n## 核心知识点\n- 点 1\n- 点 2\n- 点 3\n\n## 资源与下一步\n- 搜索关键词：${topic}\n- 建议先建立大纲，再逐步填充\n\n---\n*ibot 进化记录*`
-      };
-    }
-
-    function isWeatherQuestion(text) {
-      const keys = ['天气', '气温', '温度', '下雨', '雨', '冷不冷', '热不热', '多少度', 'weather'];
-      return keys.some(k => text.includes(k));
-    }
-    function extractPlace(text) {
-      let place = text.replace(/今天|今日|明天|现在|的|天气|气温|温度|怎么样|如何|多少度|冷不冷|热不热|\?|？|。/g, '').trim();
-      if (!place || place.length < 2) place = '上饶';
-      return place;
-    }
-    async function fetchWeather(place) {
-      try {
-        const geoUrl = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(place)}&count=1&language=zh&format=json`;
-        const geoRes = await fetch(geoUrl);
-        const geoData = await geoRes.json();
-        if (!geoData.results || geoData.results.length === 0) return `找不到「${place}」`;
-        const loc = geoData.results[0];
-        const name = loc.name + (loc.admin1 ? ' · ' + loc.admin1 : '');
-        const weatherUrl = `https://api.open-meteo.com/v1/forecast?latitude=${loc.latitude}&longitude=${loc.longitude}&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m&timezone=Asia/Shanghai`;
-        const wRes = await fetch(weatherUrl);
-        const wData = await wRes.json();
-        const cur = wData.current;
-        const weatherMap = {0:'晴朗',1:'主要晴朗',2:'局部多云',3:'阴天',45:'有雾',61:'小雨',63:'中雨',65:'大雨',71:'小雪',80:'小阵雨',95:'雷暴'};
-        const desc = weatherMap[cur.weather_code] || '未知';
-        return `${name} 当前：\n气温 ${cur.temperature_2m}°C  湿度 ${cur.relative_humidity_2m}%  风速 ${cur.wind_speed_10m}km/h\n状况：${desc}\n（已上网查询）`;
-      } catch (e) {
-        return '天气查询失败：' + e.message;
-      }
-    }
-
-    async function think(userText) {
-      const original = userText.trim();
-      const text = original.toLowerCase();
-
-      if (text.includes('清除token') || text.includes('清除 token')) {
-        clearToken();
-        return '已清除本地 Token。';
-      }
-
-      const learnMatch = original.match(/^(学习|学|研究|阅读|了解)\s*(.+)$/i);
-      if (learnMatch) {
-        const topic = learnMatch[2].trim();
-        const knowledge = generateKnowledge(topic);
-        const thinking = addMsg(`正在生成「${topic}」学习内容并尝试写入 GitHub…`, 'thinking');
-
-        try {
-          const url = await githubPutFile(
-            knowledge.path,
-            knowledge.content,
-            `ibot 学习：${topic}`
-          );
-          thinking.remove();
-          return `已完成学习并写入仓库！\n\n文件：${knowledge.path}\n链接：${url}\n\n你可以直接在 GitHub 上看到新增内容。\n继续输入「学习 电影」或「学习 歌曲」等即可继续扩展。`;
-        } catch (err) {
-          thinking.remove();
-          return `写入 GitHub 失败：${err.message}\n\n我已经为你生成了内容，请手动复制到仓库的 ${knowledge.path}：\n\n----------\n${knowledge.content}\n----------\n\n（设置正确 Token 后可自动写入）`;
-        }
-      }
-
-      if (isWeatherQuestion(original)) {
-        return await fetchWeather(extractPlace(original));
-      }
-
-      if (['你好','您好','hello','hi','嗨'].some(g => text.includes(g))) {
-        return '你好！我现在支持：\n1. 查天气（直接问）\n2. 学习指令（例：学习 经典文学）→ 自动生成并写入 GitHub\n\n先点右上角设置 Token，就能真正自动写仓库。';
-      }
-      if (['你是谁','介绍'].some(k => text.includes(k))) {
-        return '我是 ibot。已经能上网查天气，并能把学习内容自动写进你的 GitHub 仓库（需要 Token）。';
-      }
-      if (['状态','进度','进化'].some(k => text.includes(k))) {
-        const cfg = loadConfig();
-        return `当前能力：\n✓ 对话\n✓ 天气查询\n${cfg.token ? '✓' : '○'} GitHub 自动写入（${cfg.token ? '已连接 ' + cfg.repo : '未设置 Token'}）\n→ 输入「学习 经典文学」试试`;
-      }
-
-      return '我可以：\n• 查天气\n• 执行「学习 XXX」（自动生成知识并尝试写入 GitHub）\n\n设置 Token 后，写入会真正自动完成。';
-    }
-
-    async function send() {
-      const text = input.value.trim();
-      if (!text) return;
-      input.value = '';
-      addMsg(text, 'user');
-      const thinking = addMsg('处理中…', 'thinking');
-      try {
-        const reply = await think(text);
-        thinking.remove();
-        addMsg(reply, 'bot');
-      } catch (e) {
-        thinking.remove();
-        addMsg('出错：' + e.message, 'error');
-      }
-    }
-
-    sendBtn.onclick = send;
-    input.onkeydown = e => { if (e.key === 'Enter') send(); };
-
-    document.getElementById('btnSettings').onclick = () => {
-      settingsPanel.classList.toggle('show');
-      const cfg = loadConfig();
-      tokenInput.value = cfg.token;
-      repoInput.value = cfg.repo;
-    };
-    document.getElementById('btnSave').onclick = () => {
-      saveConfig(tokenInput.value.trim(), repoInput.value.trim());
-      settingsPanel.classList.remove('show');
-      addMsg('配置已保存到本机（仅你电脑可见）。现在可以输入「学习 经典文学」测试自动写入。', 'system');
-    };
-    document.getElementById('btnClear').onclick = () => {
-      clearToken();
-      tokenInput.value = '';
-      settingsPanel.classList.remove('show');
-    };
-
-    updateStatus();
-    addMsg('ibot 进化版已就绪。\n\n使用方法：\n1. 点右上角「设置 Token」，粘贴你的 Fine-grained Token 并保存\n2. 输入：学习 经典文学\n3. 它会自动在 GitHub 仓库生成 knowledge/文学.md\n\n同样支持：学习 电影、学习 歌曲、学习 任何主题\n\n天气功能依然可用。\n\n重要：永远不要把 Token 发到任何聊天里！', 'system');
-    input.focus();
-  </script>
+  <script src="js/github.js"></script>
+  <script src="js/sensors.js"></script>
+  <script src="js/brain.js"></script>
+  <script src="js/main.js"></script>
 </body>
 </html>
