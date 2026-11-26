@@ -22,6 +22,7 @@
       background: #333; color: #ccc; border: none; border-radius: 6px;
       padding: 6px 12px; font-size: 12px; cursor: pointer;
     }
+    header button:hover { background: #444; }
     #chat {
       flex: 1; overflow-y: auto; padding: 14px;
       display: flex; flex-direction: column; gap: 12px;
@@ -68,7 +69,7 @@
 <body>
   <header>
     <div class="logo">ibot</div>
-    <div class="status" id="statusText">加载中…</div>
+    <div class="status" id="statusText">未连接</div>
     <button id="btnSettings">设置</button>
   </header>
 
@@ -87,13 +88,295 @@
   <div id="chat"></div>
 
   <footer>
-    <input id="input" type="text" placeholder="直接提问，或输入：学习 主题 / 天气 地点" autocomplete="off">
+    <input id="input" type="text" placeholder="直接提问，或：学习 主题 / 天气 地点" autocomplete="off">
     <button id="send">发送</button>
   </footer>
 
-  <script src="js/github.js"></script>
-  <script src="js/sensors.js"></script>
-  <script src="js/brain.js"></script>
-  <script src="js/main.js"></script>
+  <script>
+    // ===================== GitHub =====================
+    const GitHub = {
+      loadConfig() {
+        return {
+          token: localStorage.getItem('ibot_token') || '',
+          repo: localStorage.getItem('ibot_repo') || 'xuy132/ibot'
+        };
+      },
+      saveConfig(token, repo) {
+        if (token !== undefined) localStorage.setItem('ibot_token', token);
+        if (repo !== undefined) localStorage.setItem('ibot_repo', repo);
+      },
+      clearToken() {
+        localStorage.removeItem('ibot_token');
+      },
+      async putFile(path, content, message) {
+        const cfg = this.loadConfig();
+        if (!cfg.token) throw new Error('未设置 Token');
+        const [owner, repoName] = cfg.repo.split('/');
+        if (!owner || !repoName) throw new Error('仓库格式错误');
+
+        let sha = null;
+        try {
+          const getRes = await fetch(`https://api.github.com/repos/${owner}/${repoName}/contents/${path}`, {
+            headers: { 'Authorization': `Bearer ${cfg.token}`, 'Accept': 'application/vnd.github+json' }
+          });
+          if (getRes.ok) {
+            const data = await getRes.json();
+            sha = data.sha;
+          }
+        } catch (e) {}
+
+        const body = {
+          message: message || `ibot: ${path}`,
+          content: btoa(unescape(encodeURIComponent(content))),
+          branch: 'main'
+        };
+        if (sha) body.sha = sha;
+
+        const res = await fetch(`https://api.github.com/repos/${owner}/${repoName}/contents/${path}`, {
+          method: 'PUT',
+          headers: {
+            'Authorization': `Bearer ${cfg.token}`,
+            'Accept': 'application/vnd.github+json',
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(body)
+        });
+
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.message || `GitHub ${res.status}`);
+        }
+        const result = await res.json();
+        return result.content?.html_url || `https://github.com/${owner}/${repoName}/blob/main/${path}`;
+      }
+    };
+
+    // ===================== Sensors =====================
+    const Sensors = {
+      async getWeather(place) {
+        try {
+          const geoUrl = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(place)}&count=1&language=zh&format=json`;
+          const geoRes = await fetch(geoUrl);
+          const geoData = await geoRes.json();
+          if (!geoData.results?.length) return `找不到地点「${place}」`;
+          const loc = geoData.results[0];
+          const name = loc.name + (loc.admin1 ? ' · ' + loc.admin1 : '');
+
+          const weatherUrl = `https://api.open-meteo.com/v1/forecast?latitude=${loc.latitude}&longitude=${loc.longitude}&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m&timezone=Asia/Shanghai`;
+          const wRes = await fetch(weatherUrl);
+          const wData = await wRes.json();
+          const cur = wData.current;
+
+          const map = {0:'晴朗',1:'主要晴朗',2:'局部多云',3:'阴天',45:'有雾',61:'小雨',63:'中雨',65:'大雨',71:'小雪',80:'小阵雨',95:'雷暴'};
+          const desc = map[cur.weather_code] || '未知';
+
+          return `${name}\n气温 ${cur.temperature_2m}°C\n湿度 ${cur.relative_humidity_2m}%\n风速 ${cur.wind_speed_10m} km/h\n状况：${desc}`;
+        } catch (e) {
+          return '天气查询失败：' + e.message;
+        }
+      },
+
+      async getWikipedia(topic) {
+        try {
+          let url = `https://zh.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(topic)}`;
+          let res = await fetch(url);
+          let data = await res.json();
+
+          if (!data.extract) {
+            url = `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(topic)}`;
+            res = await fetch(url);
+            data = await res.json();
+          }
+
+          if (data.extract) {
+            return {
+              title: data.title || topic,
+              extract: data.extract,
+              description: data.description || '',
+              url: data.content_urls?.desktop?.page || ''
+            };
+          }
+          return null;
+        } catch (e) {
+          return null;
+        }
+      }
+    };
+
+    // ===================== Brain =====================
+    const Brain = {
+      async process(text) {
+        const original = text.trim();
+        const lower = original.toLowerCase();
+
+        if (lower.includes('清除token') || lower.includes('清除 token')) {
+          GitHub.clearToken();
+          updateStatus();
+          return { type: 'text', content: 'Token 已清除。' };
+        }
+
+        // 学习指令
+        let topic = null;
+        const patterns = [
+          /^(学习|学|研究|阅读|了解|爬取|抓取)[：:\s]*(.+)$/i,
+          /^(.+?)\s*(学习|研究)$/i
+        ];
+        for (const p of patterns) {
+          const m = original.match(p);
+          if (m) {
+            topic = (m[2] || m[1]).trim().replace(/^[：:]\s*/, '');
+            break;
+          }
+        }
+        if (topic && topic.length > 1) {
+          return await this.learnAndAnswer(topic, true);
+        }
+
+        // 天气
+        const weatherKeys = ['天气', '气温', '温度', '下雨', '雨', '冷不冷', '热不热', '多少度'];
+        if (weatherKeys.some(k => original.includes(k))) {
+          let place = original.replace(/今天|今日|明天|现在|的|天气|气温|温度|怎么样|如何|多少度|冷不冷|热不热|[？?。]/g, '').trim();
+          if (!place || place.length < 2) place = '上饶';
+          const result = await Sensors.getWeather(place);
+          return { type: 'text', content: result };
+        }
+
+        // 状态 / 介绍
+        if (['状态', '进度', '进化', '你怎么进化', '你是谁', '介绍'].some(k => lower.includes(k))) {
+          const cfg = GitHub.loadConfig();
+          return {
+            type: 'text',
+            content: `我是 ibot。\n当前能力：\n• 直接提问 → 自动从维基百科学习并回答，同时写入仓库\n• 学习 主题 → 强制学习\n• 查天气\n• GitHub：${cfg.token ? '已连接 ' + cfg.repo : '未设置 Token'}`
+          };
+        }
+
+        if (['你好', '您好', 'hello', 'hi', '嗨'].some(g => lower.includes(g))) {
+          return { type: 'text', content: '你好。直接问我任何问题，我会尝试学习并回答。也可以说「学习 主题」或「天气 地点」。' };
+        }
+
+        // 默认：把任何输入当问题，学习并回答
+        return await this.learnAndAnswer(original, false);
+      },
+
+      async learnAndAnswer(topic, forceSave) {
+        const wiki = await Sensors.getWikipedia(topic);
+
+        if (!wiki || !wiki.extract) {
+          return {
+            type: 'text',
+            content: `关于「${topic}」，暂时没有找到可靠信息。\n可以换更具体的关键词，或用「学习 主题」强制记录。`
+          };
+        }
+
+        let answer = `**${wiki.title}**`;
+        if (wiki.description) answer += `（${wiki.description}）`;
+        answer += `\n\n${wiki.extract}`;
+        if (wiki.url) answer += `\n\n来源：${wiki.url}`;
+
+        // 自动写入知识库
+        const date = new Date().toISOString().slice(0, 10);
+        const safeName = topic.replace(/[\/\\?%*:|"<>：]/g, '_').replace(/\s+/g, '_').slice(0, 40);
+        const path = `knowledge/${safeName}.md`;
+        const content = `# ${wiki.title}\n\n> ibot 于 ${date} 自动学习\n\n${wiki.extract}\n\n${wiki.url ? '[完整条目](' + wiki.url + ')' : ''}\n\n---\n*自动记录*`;
+
+        try {
+          await GitHub.putFile(path, content, `ibot 自动学习：${topic}`);
+          answer += `\n\n（已自动写入知识库：${path}）`;
+        } catch (err) {
+          if (forceSave) answer += `\n\n写入知识库失败：${err.message}`;
+        }
+
+        return { type: 'text', content: answer };
+      }
+    };
+
+    // ===================== UI =====================
+    const chat = document.getElementById('chat');
+    const input = document.getElementById('input');
+    const sendBtn = document.getElementById('send');
+    const statusText = document.getElementById('statusText');
+    const settingsPanel = document.getElementById('settings');
+    const tokenInput = document.getElementById('tokenInput');
+    const repoInput = document.getElementById('repoInput');
+
+    function now() {
+      const d = new Date();
+      return d.getHours().toString().padStart(2, '0') + ':' + d.getMinutes().toString().padStart(2, '0');
+    }
+
+    function addMsg(text, type) {
+      const div = document.createElement('div');
+      div.className = 'msg ' + type;
+      if (type !== 'system' && type !== 'thinking') {
+        const t = document.createElement('div');
+        t.className = 'time';
+        t.textContent = (type === 'user' ? '你' : 'ibot') + '  ' + now();
+        div.appendChild(t);
+      }
+      const content = document.createElement('div');
+      content.textContent = text;
+      div.appendChild(content);
+      chat.appendChild(div);
+      chat.scrollTop = chat.scrollHeight;
+      return div;
+    }
+
+    function updateStatus() {
+      const cfg = GitHub.loadConfig();
+      if (cfg.token) {
+        statusText.textContent = '· 已连接 · ' + cfg.repo;
+        statusText.style.color = '#81c784';
+      } else {
+        statusText.textContent = '· 未连接 GitHub';
+        statusText.style.color = '#888';
+      }
+    }
+
+    async function send() {
+      const text = input.value.trim();
+      if (!text) return;
+      input.value = '';
+      addMsg(text, 'user');
+      const thinking = addMsg('思考并学习中…', 'thinking');
+      try {
+        const result = await Brain.process(text);
+        thinking.remove();
+        addMsg(result.content, 'bot');
+      } catch (e) {
+        thinking.remove();
+        addMsg('出错：' + e.message, 'error');
+      }
+    }
+
+    sendBtn.onclick = send;
+    input.onkeydown = e => { if (e.key === 'Enter') send(); };
+
+    document.getElementById('btnSettings').onclick = () => {
+      settingsPanel.classList.toggle('show');
+      const cfg = GitHub.loadConfig();
+      tokenInput.value = cfg.token;
+      repoInput.value = cfg.repo;
+    };
+
+    document.getElementById('btnSave').onclick = () => {
+      GitHub.saveConfig(tokenInput.value.trim(), repoInput.value.trim());
+      settingsPanel.classList.remove('show');
+      updateStatus();
+      addMsg('配置已保存到本机。', 'system');
+    };
+
+    document.getElementById('btnClear').onclick = () => {
+      GitHub.clearToken();
+      tokenInput.value = '';
+      settingsPanel.classList.remove('show');
+      updateStatus();
+      addMsg('Token 已清除。', 'system');
+    };
+
+    // 启动
+    updateStatus();
+    addMsg('ibot 已启动（单文件完整版）。\n\n直接提问任何问题，我会尝试从维基百科学习并回答，同时写入仓库。\n也可以用「学习 主题」或「天气 地点」。', 'system');
+    input.focus();
+  </script>
 </body>
 </html>
