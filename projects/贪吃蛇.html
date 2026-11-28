@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>贪吃蛇</title>
+<style>
+body{margin:0;display:flex;justify-content:center;align-items:center;height:100vh;background:#222;}
+canvas{background:#111;border:1px solid #fff;}
+</style>
+</head>
+<body>
+<canvas id="game" width="400" height="400"></canvas>
+<script>
+const canvas=document.getElementById('game');
+const ctx=canvas.getContext('2d');
+const box=20;
+let snake=[{x:9*box,y:10*box}];
+let food={x:Math.floor(Math.random()*20)*box,y:Math.floor(Math.random()*20)*box};
+let d='RIGHT';
+let score=0;
+let gameInterval;
+
+function draw() {
+ctx.fillStyle='#111';
+ctx.fillRect(0,0,canvas.width,canvas.height);
+ctx.fillStyle='#0f0';
+for(let i=0;i<snake.length;i++){
+ctx.fillRect(snake[i].x,snake[i].y,box,box);
+}
+ctx.fillStyle='#f00';
+ctx.fillRect(food.x,food.y,box,box);
+ctx.fillStyle='#fff';
+ctx.font='20px Arial';
+ctx.fillText('得分:'+score,2,20);
+}
+
+function moveSnake() {
+let head={x:snake[0].x,y:snake[0].y};
+if(d==='LEFT')head.x-=box;
+if(d==='UP')head.y-=box;
+if(d==='RIGHT')head.x+=box;
+if(d==='DOWN')head.y+=box;
+if(head.x===food.x&&head.y===food.y){
+score++;
+food={x:Math.floor(Math.random()*20)*box,y:Math.floor(Math.random()*20)*box};
+}else{
+snake.pop();
+}
+snake.unshift(head);
+}
+
+function collision(head) {
+for(let i=1;i<snake.length;i++){
+if(head.x===snake[i].x&&head.y===snake[i].y) return true;
+}
+if(head.x<0||head.x>=canvas.width||head.y<0||head.y>=canvas.height) return true;
+return false;
+}
+
+function keyDown(e){
+if(e.key==='ArrowLeft'&&d!=='RIGHT') d='LEFT';
+else if(e.key==='ArrowUp'&&d!=='DOWN') d='UP';
+else if(e.key==='ArrowRight'&&d!=='LEFT') d='RIGHT';
+else if(e.key==='ArrowDown'&&d!=='UP') d='DOWN';
+}
+
+function startGame(){
+clearInterval(gameInterval);
+gameInterval=setInterval(()=>{
+draw();
+moveSnake();
+if(collision(snake[0])){
+clearInterval(gameInterval);
+alert('游戏结束！得分:'+score);
+snake=[{x:9*box,y:10*box}];
+d='RIGHT';
+score=0;
+food={x:Math.floor(Math.random()*20)*box,y:Math.floor(Math.random()*20)*box};
+}
+},200);
+}
+
+document.addEventListener('keydown',keyDown);
+startGame();
+</script>
+</body>
+</html>
