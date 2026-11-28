@@ -86,8 +86,8 @@
       <button class="btn-clear" id="btnClear">清除所有 Key</button>
     </div>
     <div class="hint">
-      所有 Key 只保存在你浏览器本地，不会上传。<br>
-      Groq 免费额度用完后，需要你自己去官网更新 Key。<br>
+      所有 Key 只保存在你浏览器本地。<br>
+      当前使用模型：openai/gpt-oss-20b（免费可用）<br>
       永远不要把任何 Key 发到聊天窗口。
     </div>
   </div>
@@ -100,7 +100,6 @@
   </footer>
 
   <script>
-    // ==================== 配置 ====================
     const Config = {
       load() {
         return {
@@ -120,7 +119,6 @@
       }
     };
 
-    // ==================== GitHub 写入 ====================
     async function githubPut(path, content, message) {
       const cfg = Config.load();
       if (!cfg.githubToken) throw new Error('未设置 GitHub Token');
@@ -159,7 +157,6 @@
       return data.content?.html_url || '';
     }
 
-    // ==================== 天气 ====================
     async function getWeather(place) {
       try {
         const geo = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(place)}&count=1&language=zh&format=json`).then(r => r.json());
@@ -175,26 +172,18 @@
       }
     }
 
-    // ==================== Groq 对话 ====================
-    const history = [];  // 简单多轮记忆
+    const history = [];
 
     async function chatWithGroq(userText) {
       const cfg = Config.load();
       if (!cfg.groqKey) throw new Error('未设置 Groq API Key，请先点右上角「设置」');
 
-      // 系统提示
       const systemPrompt = `你是 ibot，一个运行在纯网页上的个人智能体。
-你的目标是不断学习、记住知识，并尽量给出有用、诚实的回答。
-你可以：
-- 正常对话和推理
-- 回答用户关于天气的问题时，可以说「请让我查一下天气」
-- 当用户说「学习 XXX」时，帮助整理知识
-
-回答请简洁有条理，使用中文。`;
+你的目标是帮助用户学习、回答问题，并尽量给出有用、诚实的回答。
+回答请使用中文，简洁有条理。`;
 
       history.push({ role: 'user', content: userText });
 
-      // 只保留最近几轮，防止太长
       const messages = [
         { role: 'system', content: systemPrompt },
         ...history.slice(-8)
@@ -207,7 +196,7 @@
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          model: 'llama-3.3-70b-versatile',
+          model: 'openai/gpt-oss-20b',   // 已改为当前免费可用的模型
           messages: messages,
           temperature: 0.7,
           max_tokens: 1024
@@ -217,7 +206,7 @@
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         if (res.status === 401) throw new Error('Groq Key 无效，请检查设置');
-        if (res.status === 429) throw new Error('Groq 额度已用完或请求过快，请稍后再试或更新 Key');
+        if (res.status === 429) throw new Error('Groq 额度已用完或请求过快，请稍后再试');
         throw new Error(err.error?.message || `Groq 错误 ${res.status}`);
       }
 
@@ -227,12 +216,10 @@
       return reply;
     }
 
-    // ==================== 主处理逻辑 ====================
     async function process(text) {
       const original = text.trim();
-      const lower = original.toLowerCase();
 
-      // 天气专用
+      // 天气
       if (['天气', '气温', '温度', '下雨'].some(k => original.includes(k))) {
         let place = original
           .replace(/今天|今日|明天|现在|的|天气|气温|温度|怎么样|如何|多少度|冷不冷|热不热|穿衣注意|穿衣|[？?。,，、]/g, ' ')
@@ -242,27 +229,27 @@
         return await getWeather(place);
       }
 
-      // 学习指令 → 用 Groq 生成内容再写入 GitHub
+      // 学习
       const learnMatch = original.match(/^(学习|学|研究|阅读)[：:\s]*(.+)$/i);
       if (learnMatch) {
         const topic = learnMatch[2].trim();
-        const content = await chatWithGroq(`请为「${topic}」写一份简洁有用的学习笔记，包含核心要点、重要人物或概念、以及建议的下一步。用 Markdown 格式。`);
+        const content = await chatWithGroq(`请为「${topic}」写一份简洁有用的学习笔记，包含核心要点和建议的下一步。用中文。`);
         const date = new Date().toISOString().slice(0, 10);
         const safeName = topic.replace(/[\/\\?%*:|"<>：]/g, '_').replace(/\s+/g, '_').slice(0, 40);
         const path = `knowledge/${safeName}.md`;
         try {
-          const url = await githubPut(path, `# ${topic}\n\n> ibot 于 ${date} 学习\n\n${content}\n\n---\n*ibot*`, `ibot 学习：${topic}`);
+          await githubPut(path, `# ${topic}\n\n> ibot 于 ${date} 学习\n\n${content}\n\n---\n*ibot*`, `ibot 学习：${topic}`);
           return `已学习并写入知识库。\n文件：${path}\n\n${content}`;
         } catch (e) {
           return `学习内容已生成，但写入 GitHub 失败：${e.message}\n\n${content}`;
         }
       }
 
-      // 默认：走 Groq 对话
+      // 默认对话
       return await chatWithGroq(original);
     }
 
-    // ==================== UI ====================
+    // UI
     const chatEl = document.getElementById('chat');
     const input = document.getElementById('input');
     const statusText = document.getElementById('statusText');
@@ -351,9 +338,8 @@
       addMsg('所有 Key 已清除。', 'system');
     };
 
-    // 启动
     updateStatus();
-    addMsg('ibot 已启动（Groq 对话版）。\n\n1. 点右上角「设置」\n2. 填入 GitHub Token 和 Groq API Key\n3. 保存后即可对话\n\n支持：\n• 直接聊天（使用 Groq）\n• 天气 地点\n• 学习 主题（生成笔记并写入 GitHub）', 'system');
+    addMsg('ibot 已启动（已修复模型）。\n\n当前使用免费模型：openai/gpt-oss-20b\n\n请确认设置里已填入正确的 Groq Key，然后直接对话测试。', 'system');
     input.focus();
   </script>
 </body>
