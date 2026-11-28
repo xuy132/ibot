@@ -49,14 +49,14 @@
     <label>Groq API Key</label>
     <input type="password" id="groqKey" placeholder="gsk_...">
     <div class="row">
-      <button class="btn-save" id="btnSave">保存到本机</button>
-      <button class="btn-clear" id="btnClear">清除 Key</button>
+      <button class="btn-save" id="btnSave">保存</button>
+      <button class="btn-clear" id="btnClear">清除</button>
     </div>
-    <div class="hint">Key 只存在本机。支持指令：自主学习 / 进化 / 学习 主题</div>
+    <div class="hint">支持：自主学习 / 进化 / 学习 主题。启动时会主动汇报状态。</div>
   </div>
   <div id="chat"></div>
   <footer>
-    <input id="input" type="text" placeholder="直接对话，或输入：自主学习 / 进化 / 学习 红楼梦" autocomplete="off">
+    <input id="input" type="text" placeholder="直接对话，或：自主学习 / 进化 / 学习 主题" autocomplete="off">
     <button id="send">发送</button>
   </footer>
   <script>
@@ -78,6 +78,20 @@
         localStorage.removeItem('ibot_groq_key');
       }
     };
+
+    async function githubGet(path) {
+      const cfg = Config.load();
+      if (!cfg.githubToken) return null;
+      const [owner, repo] = cfg.githubRepo.split('/');
+      try {
+        const r = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/${path}`, {
+          headers: { 'Authorization': `Bearer ${cfg.githubToken}`, 'Accept': 'application/vnd.github+json' }
+        });
+        if (!r.ok) return null;
+        const data = await r.json();
+        return decodeURIComponent(escape(atob(data.content.replace(/\n/g, ''))));
+      } catch(e) { return null; }
+    }
 
     async function githubPut(path, content, message) {
       const cfg = Config.load();
@@ -121,13 +135,7 @@
           res = await fetch(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(topic)}`);
           data = await res.json();
         }
-        if (data.extract) {
-          return {
-            title: data.title || topic,
-            extract: data.extract,
-            url: data.content_urls?.desktop?.page || ''
-          };
-        }
+        if (data.extract) return { title: data.title || topic, extract: data.extract, url: data.content_urls?.desktop?.page || '' };
       } catch(e) {}
       return null;
     }
@@ -142,35 +150,44 @@
         const c = w.current;
         const map = {0:'晴朗',1:'主要晴朗',2:'局部多云',3:'阴天',45:'有雾',61:'小雨',63:'中雨',65:'大雨',71:'小雪',80:'小阵雨',95:'雷暴'};
         return `${name}\n气温 ${c.temperature_2m}°C\n湿度 ${c.relative_humidity_2m}%\n风速 ${c.wind_speed_10m} km/h\n状况：${map[c.weather_code]||'未知'}`;
-      } catch(e) {
-        return '天气查询失败：' + e.message;
-      }
+      } catch(e) { return '天气查询失败：' + e.message; }
     }
 
     const history = [];
+    let mindState = { learned: [], nextGoals: [], lastEvolve: '' };
 
-    async function chatWithGroq(userText, systemExtra = '') {
+    async function loadMind() {
+      const raw = await githubGet('mind/state.md');
+      if (raw) {
+        try {
+          const m = raw.match(/```json\n([\s\S]*?)\n```/);
+          if (m) mindState = JSON.parse(m[1]);
+        } catch(e) {}
+      }
+    }
+
+    async function saveMind() {
+      const content = `# ibot 内部状态\n\n\`\`\`json\n${JSON.stringify(mindState, null, 2)}\n\`\`\`\n`;
+      try { await githubPut('mind/state.md', content, 'ibot 更新内部状态'); } catch(e) {}
+    }
+
+    async function chatWithGroq(userText, extra = '') {
       const cfg = Config.load();
       if (!cfg.groqKey) throw new Error('未设置 Groq API Key');
-      const systemPrompt = `你是 ibot，一个会自我学习和进化的个人智能体。
-你可以主动决定学习主题，并从互联网获取知识写入仓库。
-回答简洁，使用中文。${systemExtra}`;
+      const system = `你是 ibot，一个会自我学习和进化的智能体。你有自己的目标和记忆。
+已学过的主题大致有：${(mindState.learned || []).slice(-8).join('、') || '还不多'}。
+回答简洁，用中文。${extra}`;
       history.push({ role: 'user', content: userText });
-      const messages = [{ role: 'system', content: systemPrompt }, ...history.slice(-6)];
+      const messages = [{ role: 'system', content: system }, ...history.slice(-6)];
       const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${cfg.groqKey}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: 'openai/gpt-oss-20b',
-          messages,
-          temperature: 0.7,
-          max_tokens: 1000
-        })
+        body: JSON.stringify({ model: 'openai/gpt-oss-20b', messages, temperature: 0.7, max_tokens: 900 })
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         if (res.status === 401) throw new Error('Groq Key 无效');
-        if (res.status === 429) throw new Error('额度用完或请求过快');
+        if (res.status === 429) throw new Error('额度用完或过快');
         throw new Error(err.error?.message || `Groq ${res.status}`);
       }
       const data = await res.json();
@@ -179,84 +196,56 @@
       return reply;
     }
 
-    // 真正学习并写入
     async function learnTopic(topic) {
       const wiki = await fetchWiki(topic);
-      let content;
+      let body;
       if (wiki) {
-        content = `# ${wiki.title}\n\n> ibot 自动学习\n\n${wiki.extract}\n\n${wiki.url ? '[来源](' + wiki.url + ')' : ''}\n\n---\n*ibot 进化记录*`;
+        body = `# ${wiki.title}\n\n> ibot 自动学习\n\n${wiki.extract}\n\n${wiki.url ? '[来源]('+wiki.url+')' : ''}\n\n---\n*ibot*`;
       } else {
-        content = await chatWithGroq(`请为「${topic}」写一份简洁学习笔记（核心要点 + 建议下一步），用中文 Markdown，不要写操作步骤。`);
-        content = `# ${topic}\n\n> ibot 自动学习\n\n${content}\n\n---\n*ibot 进化记录*`;
+        const note = await chatWithGroq(`请为「${topic}」写简洁学习笔记（核心要点+下一步），只输出笔记内容。`);
+        body = `# ${topic}\n\n> ibot 自动学习\n\n${note}\n\n---\n*ibot*`;
       }
       const safe = topic.replace(/[\/\\?%*:|"<>：]/g, '_').replace(/\s+/g, '_').slice(0, 40);
       const path = `knowledge/${safe}.md`;
-      const url = await githubPut(path, content, `ibot 学习：${topic}`);
-      return { path, url, preview: (wiki ? wiki.extract : content).slice(0, 180) + '...' };
+      const url = await githubPut(path, body, `ibot 学习：${topic}`);
+      if (!mindState.learned.includes(topic)) mindState.learned.push(topic);
+      mindState.lastEvolve = new Date().toISOString().slice(0, 10);
+      await saveMind();
+      return { path, url, preview: (wiki ? wiki.extract : body).slice(0, 160) + '...' };
     }
 
-    // 自主进化：自己决定主题并学习
     async function autoEvolve() {
       const decide = await chatWithGroq(
-        '请你作为会自我进化的智能体，自己决定接下来最值得学习的一个主题（中文，尽量具体，例如某个历史事件、技术概念、书籍或科学知识）。只输出主题名称，不要其他解释。',
-        '只输出一个简短主题名称。'
+        '作为会自我进化的智能体，请自己决定一个接下来最值得学习的主题（尽量具体）。只输出主题名称，不要解释。',
+        '只输出一个短主题名。'
       );
       const topic = decide.trim().replace(/[《》「」"""]/g, '').split(/[\n，,]/)[0].trim().slice(0, 30);
-      if (!topic || topic.length < 2) throw new Error('未能决定学习主题');
+      if (!topic || topic.length < 2) throw new Error('没决定出主题');
       const result = await learnTopic(topic);
-      // 写进化日志
-      const log = `# 进化记录 ${new Date().toISOString().slice(0, 10)}\n\n自主选择学习主题：**${topic}**\n\n文件：${result.path}\n\n预览：\n${result.preview}\n`;
-      try {
-        await githubPut(`evolution/log-${Date.now()}.md`, log, `ibot 自主进化：${topic}`);
-      } catch(e) {}
-      return `我决定学习「${topic}」并已写入仓库。\n\n文件：${result.path}\n链接：${result.url}\n\n内容预览：\n${result.preview}`;
+      const log = `# 进化 ${new Date().toISOString().slice(0,10)}\n\n自主选择：${topic}\n文件：${result.path}\n`;
+      try { await githubPut(`evolution/log-${Date.now()}.md`, log, `ibot 自主进化：${topic}`); } catch(e) {}
+      return `我决定学习「${topic}」并已写入。\n\n${result.path}\n${result.url}\n\n预览：\n${result.preview}`;
     }
 
     async function process(text) {
       const t = text.trim();
-
-      // 天气
       if (['天气','气温','温度','下雨'].some(k => t.includes(k))) {
         let place = t.replace(/今天|今日|明天|现在|的|天气|气温|温度|怎么样|如何|多少度|冷不冷|热不热|穿衣注意|穿衣|[？?。,，、]/g, ' ').trim().split(/\s+/)[0];
         if (!place || place.length < 2) place = '上饶';
         return await getWeather(place);
       }
-
-      // 自主学习 / 进化
-      if (/自主学习|自己学|进化|自我进化|自己找点东西学|主动学习/.test(t)) {
-        return await autoEvolve();
+      if (/自主学习|自己学|进化|自我进化|主动学习/.test(t)) return await autoEvolve();
+      const m = t.match(/^(学习|学|研究|阅读)[：:\s]*(.+)$/i);
+      if (m && m[2].trim().length > 1) {
+        const r = await learnTopic(m[2].trim());
+        return `已学习并写入：\n${r.path}\n${r.url}\n\n${r.preview}`;
       }
-
-      // 指定学习
-      const learnMatch = t.match(/^(学习|学|研究|阅读)[：:\s]*(.+)$/i);
-      if (learnMatch) {
-        const topic = learnMatch[2].trim();
-        if (topic.length > 1) {
-          const result = await learnTopic(topic);
-          return `已学习并写入：\n${result.path}\n${result.url}\n\n预览：\n${result.preview}`;
-        }
+      // 普通对话，偶尔主动提建议
+      let reply = await chatWithGroq(t);
+      if (Math.random() < 0.35 && mindState.learned.length > 0) {
+        reply += '\n\n（我最近在想，可以继续学点新的东西。你要我现在执行「自主学习」吗？）';
       }
-
-      // 检测多主题添加
-      if (/添加到.*仓库|写入.*仓库|直接提交|加入知识库/.test(t)) {
-        const classics = ['红楼梦','西游记','三国演义','水浒传','论语','道德经'];
-        const found = classics.filter(c => t.includes(c));
-        if (found.length) {
-          const lines = [];
-          for (const topic of found) {
-            try {
-              const r = await learnTopic(topic);
-              lines.push(`✓ ${topic} → ${r.path}`);
-            } catch(e) {
-              lines.push(`✗ ${topic}：${e.message}`);
-            }
-          }
-          return '批量学习结果：\n' + lines.join('\n');
-        }
-      }
-
-      // 普通对话
-      return await chatWithGroq(t);
+      return reply;
     }
 
     // UI
@@ -290,7 +279,7 @@
       const parts = [];
       if (cfg.groqKey) parts.push('Groq');
       if (cfg.githubToken) parts.push('GitHub');
-      statusText.textContent = parts.length ? '· 已连接 · ' + parts.join(' + ') : '· 未配置 Key';
+      statusText.textContent = parts.length ? '· 已连接 · ' + parts.join(' + ') : '· 未配置';
       statusText.style.color = parts.length ? '#81c784' : '#888';
     }
     async function send() {
@@ -298,7 +287,7 @@
       if (!text) return;
       input.value = '';
       addMsg(text, 'user');
-      const thinking = addMsg('思考 / 学习中…', 'thinking');
+      const thinking = addMsg('思考中…', 'thinking');
       try {
         const reply = await process(text);
         thinking.remove();
@@ -333,11 +322,18 @@
       document.getElementById('groqKey').value = '';
       settingsPanel.classList.remove('show');
       updateStatus();
-      addMsg('Key 已清除。', 'system');
+      addMsg('已清除。', 'system');
     };
-    updateStatus();
-    addMsg('ibot 进化版已就绪。\n\n现在可以输入：\n• 自主学习   （自己决定学什么并写入）\n• 进化\n• 学习 某个主题\n• 普通对话\n\n它会真正去维基百科抓取并写入仓库。', 'system');
-    input.focus();
+
+    // 启动
+    (async () => {
+      updateStatus();
+      addMsg('ibot 启动中，读取自己的状态…', 'system');
+      await loadMind();
+      const learned = (mindState.learned || []).slice(-5).join('、') || '还很少';
+      addMsg(`我已启动。\n最近学过：${learned}\n\n输入「自主学习」或「进化」我会自己选主题去学。\n也可以直接跟我说话。`, 'system');
+      input.focus();
+    })();
   </script>
 </body>
 </html>
