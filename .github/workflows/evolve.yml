@@ -1,0 +1,39 @@
+name: ibot 自主进化
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'   # 每 6 小时跑一次（免费额度够用）
+  workflow_dispatch:        # 允许手动触发
+
+jobs:
+  evolve:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 简单自主进化（维基百科）
+        run: |
+          mkdir -p knowledge evolution mind
+          TOPIC="量子计算基础"
+          # 这里可以以后换成调用免费 API
+          echo "# $TOPIC" > knowledge/auto-$(date +%s).md
+          echo "" >> knowledge/auto-$(date +%s).md
+          echo "> ibot GitHub Actions 自动进化 $(date -u +%Y-%m-%d)" >> knowledge/auto-$(date +%s).md
+          echo "" >> knowledge/auto-$(date +%s).md
+          echo "这是后台自动进化的占位记录。后续可扩展为真正抓取与总结。" >> knowledge/auto-$(date +%s).md
+          echo "" >> knowledge/auto-$(date +%s).md
+          echo "---" >> knowledge/auto-$(date +%s).md
+          echo "*ibot Actions*" >> knowledge/auto-$(date +%s).md
+
+          echo "# 进化日志 $(date -u +%Y-%m-%d)" > evolution/actions-$(date +%s).md
+          echo "后台 Actions 已执行一次占位进化。" >> evolution/actions-$(date +%s).md
+
+      - name: 提交
+        run: |
+          git config user.name "ibot-actions"
+          git config user.email "ibot@users.noreply.github.com"
+          git add knowledge/ evolution/ || true
+          git diff --staged --quiet || git commit -m "ibot Actions 自主进化 $(date -u +%Y-%m-%d)"
+          git push
